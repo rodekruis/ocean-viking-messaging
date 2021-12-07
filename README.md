@@ -1,5 +1,7 @@
 # ocean-viking-messaging
-Help rescued people inform their loved ones that they're safe and well. Developed for the [rescue ship "Ocean Viking"](https://sosmediterranee.com/about-us/) in support of the [HSP@Sea operation](https://go.ifrc.org/emergencies/5425).
+Help rescued people inform their loved ones that they're safe and well. 
+
+Developed for the [rescue ship "Ocean Viking"](https://sosmediterranee.com/about-us/) in support of the [HSP@Sea operation](https://go.ifrc.org/emergencies/5425).
 
 Synopsis: it's a [dockerized](https://www.docker.com/) [python app](https://packaging.python.org/en/latest/tutorials/packaging-projects/) that connects [Kobo](https://www.kobotoolbox.org/) (data collection tool) and [Twilio](https://www.twilio.com/) (messaging service).
 
