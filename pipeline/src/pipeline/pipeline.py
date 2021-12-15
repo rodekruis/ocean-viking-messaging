@@ -81,11 +81,12 @@ def main():
 
         message_text = df_message_text.loc[df_message_text['language'] == lang]['message'].values[0]
         message_text = message_text.replace('123', name)
+        from_text = df_message_text.loc[df_message_text['language'] == lang]['from'].values[0]
 
         try:
             message = client.messages.create(
                 body=str(message_text),
-                from_='+3197010257142',
+                from_=str(from_text),
                 to='+'+str(phone)
             )
         except TwilioRestException as e:
