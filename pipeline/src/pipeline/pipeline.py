@@ -89,8 +89,18 @@ def main():
                 from_=str(from_text),
                 to='+'+str(phone)
             )
+            df_to_send.at[ix, "_notes"] = "submitted as OV"
         except TwilioRestException as e:
-            logging.error(e)
+            try:
+                message = client.messages.create(
+                    body=str(message_text),
+                    from_='+'+os.environ['TWILIO_PHONE_NUMBER'],
+                    to='+'+str(phone)
+                )
+                df_to_send.at[ix, "_notes"] = "submitted as number"
+            except TwilioRestException as e:
+                logging.error(e)
+                df_to_send.at[ix, "_notes"] = f"error: {e}"
 
     df_historical = df_historical.append(df_to_send, ignore_index=True)
     df_historical.to_csv('messages-sent.csv', index=False)
