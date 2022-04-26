@@ -12,7 +12,7 @@ Worflow: a kobo form registers the name of the rescued person, the number that h
 ## Setup
 
 1. [Create an account on Kobo](https://kf.kobotoolbox.org/accounts/register/#/)
-2. Set up the form in Kobo. It should contain the fields 'name', 'telephone' and 'language'
+2. Set up the form in Kobo. It should contain the fields 'name', 'telephone' and 'language'. See an example [here](https://docs.google.com/spreadsheets/d/1LVxKnWFMr_x7DczDL-wvKCPbntnZ1tjx/edit?usp=sharing&ouid=110480065025740210638&rtpof=true&sd=true).
 3. [Create an account on Twilio](https://www.twilio.com/try-twilio)
 4. [Set up a Twilio Messaging Service](https://www.twilio.com/docs/sms/quickstart/python)
 5. Add the Kobo and Twilio credentials in credentials/.env
