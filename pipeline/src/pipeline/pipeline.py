@@ -21,10 +21,7 @@ logging.getLogger("").addHandler(console)
 twilio_logger = logging.getLogger('twilio.http_client')
 twilio_logger.setLevel(logging.WARNING)
 # load credentials
-load_dotenv(dotenv_path="credentials/.env")
-# set valid message statuses
-VALID_MESSAGE_STATUS = ['delivered',
-                        'not_delivered']
+load_dotenv(dotenv_path="../credentials/.env")
 
 
 def get_kobo_data():
@@ -41,10 +38,8 @@ def get_kobo_data():
     return df_form
 
 
-def update_kobo_data(submission_id, status):
+def update_kobo_data(submission_id, field, status):
     """update message_status of one submission"""
-    if status not in VALID_MESSAGE_STATUS:
-        raise ValueError("update_kobo_data: status must be one of %r." % VALID_MESSAGE_STATUS)
 
     # update submission in kobo
     url = f'https://kobonew.ifrc.org/api/v2/assets/{os.getenv("ASSET")}/data/bulk/'
@@ -52,7 +47,7 @@ def update_kobo_data(submission_id, status):
     params = {'format': 'json'}
     payload = {
         "submission_ids": [str(submission_id)],
-        "data": {'message_status': status}
+        "data": {field: status}
     }
     print(payload)
     r = requests.patch(
@@ -70,6 +65,7 @@ def main():
         tzinfo=datetime.timezone.utc).isoformat()
 
     df_to_send = get_kobo_data()
+    logging.info(f"Processing {len(df_to_send)} kobo submissions")
     account_sid = os.environ['TWILIO_ACCOUNT_SID']
     auth_token = os.environ['TWILIO_AUTH_TOKEN']
     client = Client(account_sid, auth_token)
@@ -77,67 +73,34 @@ def main():
 
     for ix, row in df_to_send.iterrows():
         if row['message_status'] == 'new':
+            logging.info(f"New submission found, sending message")
             name = row['name']
             lang = row['language']
             phone = row['telephone']
 
             message_text = df_message_text.loc[df_message_text['language'] == lang]['message'].values[0]
             message_text = message_text.replace('123', name)
-            from_text = df_message_text.loc[df_message_text['language'] == lang]['from'].values[0]
-            is_sender_alphanumeric = True
-            sid = 0
-            delivered = False
+            sid = ""
+            error = ""
 
             try:
                 message = client.messages.create(
                     body=str(message_text),
-                    from_=str(from_text),
-                    to='+' + str(phone)
+                    from_=os.environ['MESSAGING_SERVICE'],
+                    to='+' + str(phone),
+                    status_callback=os.environ['STATUS_CALLBACK_URL']
                 )
                 sid = message.sid
             except TwilioRestException as e:
                 logging.error(e)
-                is_sender_alphanumeric = False
-                try:
-                    message = client.messages.create(
-                        body=str(message_text),
-                        from_='+' + os.environ['TWILIO_PHONE_NUMBER'],
-                        to='+' + str(phone)
-                    )
-                    sid = message.sid
-                except TwilioRestException as e:
-                    logging.error(e)
-
-            # wait 30 seconds and check message status;
-            time.sleep(30)
-            try:
-                message = client.messages(sid).fetch()
-                error_code = message.error_code
-                if error_code is None:
-                    delivered = True
-                # if failed with error 30008 (unknown error), try without alphanumeric sender
-                if error_code == 30008 and is_sender_alphanumeric:
-                    try:
-                        client.messages.create(
-                            body=str(message_text),
-                            from_='+' + os.environ['TWILIO_PHONE_NUMBER'],
-                            to='+' + str(phone)
-                        )
-                        time.sleep(30)
-                        message = client.messages(sid).fetch()
-                        error_code = message.error_code
-                        if error_code is None:
-                            delivered = True
-                    except TwilioRestException as e:
-                        logging.error(e)
-            except TwilioRestException as e:
-                logging.error(e)
+                error = e
 
             submission_id = row['_id']
-            if delivered:
-                update_kobo_data(submission_id, 'delivered')
+            update_kobo_data(submission_id, 'message_status', 'processed')
+            if sid != "":
+                update_kobo_data(submission_id, 'message_sid', sid)
             else:
-                update_kobo_data(submission_id, 'not_delivered')
+                update_kobo_data(submission_id, 'error_code', str(error))
 
     logging.info('Python timer trigger function ran at %s', utc_timestamp)
 
