@@ -2,13 +2,13 @@ import datetime
 import requests
 import pandas as pd
 import os
-import time
-from twilio.rest import Client
 from dotenv import load_dotenv
-from twilio.base.exceptions import TwilioRestException
 import click
 import json
 import logging
+import numpy as np
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
 logging.root.handlers = []
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.DEBUG, filename='ex.log')
 # set up logging to console
@@ -18,10 +18,8 @@ console.setLevel(logging.WARNING)
 formatter = logging.Formatter('%(asctime)s : %(levelname)s : %(message)s')
 console.setFormatter(formatter)
 logging.getLogger("").addHandler(console)
-twilio_logger = logging.getLogger('twilio.http_client')
-twilio_logger.setLevel(logging.WARNING)
 # load credentials
-load_dotenv(dotenv_path="../credentials/.env")
+load_dotenv(dotenv_path="../../../credentials/.env")
 
 
 def get_kobo_data():
@@ -34,7 +32,14 @@ def get_kobo_data():
     if 'results' in data.keys():
         df_form = pd.DataFrame(data['results'])
     else:
-        df_form = pd.DataFrame(columns=['name', 'language', 'telephone', 'message_status'])
+        df_form = pd.DataFrame(columns=['bracelet_number',
+                                        'name',
+                                        'recipient_name',
+                                        'family_connection',
+                                        'telephone',
+                                        'message_status'
+                                        ]
+                               )
     return df_form
 
 
@@ -64,46 +69,85 @@ def main():
     utc_timestamp = datetime.datetime.utcnow().replace(
         tzinfo=datetime.timezone.utc).isoformat()
 
+    # get rotation info
+    SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+    SAMPLE_SPREADSHEET_ID = '1L-d0lT2s7QjxlXbvYkcBWdSPFkKsYEtD52J_H4VK8dA'
+    SAMPLE_RANGE_NAME = 'Rotations!A:C'
+    sa_file = '../../../google-service-account-hspatsea-ocean-viking.json'
+    creds = service_account.Credentials.from_service_account_file(sa_file, scopes=SCOPES)
+    service = build('sheets', 'v4', credentials=creds)
+    # Call the Sheets API
+    sheet = service.spreadsheets()
+    result = sheet.values().get(spreadsheetId=SAMPLE_SPREADSHEET_ID,
+                                range=SAMPLE_RANGE_NAME).execute()
+    values = result.get('values', [])
+    # Create dataframe of rotations
+    df_rotations = pd.DataFrame.from_records(values[1:], columns=values[0])
+    df_rotations['Start date'] = pd.to_datetime(df_rotations['Start date'], dayfirst=True)
+    df_rotations['End date'] = pd.to_datetime(df_rotations['End date'], dayfirst=True)
+    df_rotations['Rotation No'] = df_rotations['Rotation No'].astype(float)
+    rotation_no = max(df_rotations['Rotation No'])
+    start_date_ = datetime.date.today()
+    end_date_ = datetime.date.today()
+
+    # Get Kobo data
     df_to_send = get_kobo_data()
+
+    if df_to_send.empty:
+        return
+
+    # Filter out data of current rotation
+    df_to_send['_submission_time'] = pd.to_datetime(df_to_send['_submission_time'])
+
+    for ix, row in df_rotations.iterrows():
+        if row['Start date'] <= pd.to_datetime(datetime.date.today()) <= row['End date']:
+            rotation_no = row['Rotation No']
+            start_date_ = row['Start date']
+            end_date_ = row['End date']
+
+    df_to_send = df_to_send[(df_to_send['_submission_time'] >= start_date_) &
+                            (df_to_send['_submission_time'] <= end_date_)]
+
+    # Create Salamat info sheet
     logging.info(f"Processing {len(df_to_send)} kobo submissions")
-    account_sid = os.environ['TWILIO_ACCOUNT_SID']
-    auth_token = os.environ['TWILIO_AUTH_TOKEN']
-    client = Client(account_sid, auth_token)
-    df_message_text = pd.read_excel('../data/message-text.xlsx')
 
+    columns_to_keep = ['bracelet_number',
+                       'name',
+                       'name_recipient_1',
+                       'family_connection_1',
+                       'family_connection_other_1',
+                       'telephone_1',
+                       'message_status',
+                       '_id']
+
+    for col in df_to_send.columns:
+        if col not in columns_to_keep:
+            df_to_send = df_to_send.drop(columns=[col])
+
+    # Get new entries
+    df_to_send = df_to_send[df_to_send['message_status'] == 'new']
+
+    # Determine family connections
+    if 'family_connection_other_1' in df_to_send.columns:
+        df_to_send['family_connection_1'] = np.where(
+            df_to_send['family_connection_1'] == 'other',
+            df_to_send['family_connection_other_1'],
+            df_to_send['family_connection_1']
+        )
+
+        df_to_send = df_to_send.drop(columns=['family_connection_other_1'])
+
+    # Update message status
     for ix, row in df_to_send.iterrows():
-        if row['message_status'] == 'new':
-            logging.info(f"New submission found, sending message")
-            name = row['name']
-            lang = row['language']
-            phone = row['telephone']
+        submission_id = row['_id']
+        update_kobo_data(submission_id, 'message_status', 'processed')
 
-            message_text = df_message_text.loc[df_message_text['language'] == lang]['message'].values[0]
-            message_text = message_text.replace('123', name)
-            sid = ""
-            error = ""
+    df_to_send = df_to_send.drop(columns=['message_status', '_id'])
 
-            try:
-                message = client.messages.create(
-                    body=str(message_text),
-                    from_=os.environ['MESSAGING_SERVICE'],
-                    to='+' + str(phone),
-                    status_callback=os.environ['STATUS_CALLBACK_URL']
-                )
-                sid = message.sid
-            except TwilioRestException as e:
-                logging.error(e)
-                error = e
-
-            submission_id = row['_id']
-            update_kobo_data(submission_id, 'message_status', 'processed')
-            if sid != "":
-                update_kobo_data(submission_id, 'message_sid', sid)
-            else:
-                update_kobo_data(submission_id, 'error_code', str(error))
+    # Save Salamat sheet
+    df_to_send.to_excel(f'../../../Salamat_r{rotation_no}_{datetime.date.today()}.xlsx', index=False)
 
     logging.info('Python timer trigger function ran at %s', utc_timestamp)
-
 
 if __name__ == "__main__":
     main()
